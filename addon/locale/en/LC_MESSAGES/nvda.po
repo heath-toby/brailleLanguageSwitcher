@@ -1,0 +1,84 @@
+# Braille Language Switcher - English translations
+# This file contains English message strings for the add-on.
+#
+msgid ""
+msgstr ""
+"Project-Id-Version: brailleLanguageSwitcher 1.0.0\n"
+"Report-Msgid-Bugs-To: \n"
+"POT-Creation-Date: 2025-01-01 00:00+0000\n"
+"PO-Revision-Date: 2025-01-01 00:00+0000\n"
+"Last-Translator: \n"
+"Language-Team: \n"
+"Language: en\n"
+"MIME-Version: 1.0\n"
+"Content-Type: text/plain; charset=UTF-8\n"
+"Content-Transfer-Encoding: 8bit\n"
+
+# Settings panel title
+msgid "Braille Language Switcher"
+msgstr "Braille Language Switcher"
+
+# Enable checkbox
+msgid "&Enable automatic braille language switching"
+msgstr "&Enable automatic braille language switching"
+
+# Language list label
+msgid "Configured &languages (check to enable):"
+msgstr "Configured &languages (check to enable):"
+
+# Modify button
+msgid "&Modify braille profile..."
+msgstr "&Modify braille profile..."
+
+# Reset button
+msgid "&Reset all profiles"
+msgstr "&Reset all profiles"
+
+# ELS status messages
+msgid "Enhanced Language Switching: Available"
+msgstr "Enhanced Language Switching: Available"
+
+msgid "Enhanced Language Switching: Not installed (using native detection)"
+msgstr "Enhanced Language Switching: Not installed (using native detection)"
+
+# Error messages
+msgid "Please select a language to modify."
+msgstr "Please select a language to modify."
+
+msgid "No Selection"
+msgstr "No Selection"
+
+# Reset confirmation
+msgid "Are you sure you want to reset all braille profiles? This cannot be undone."
+msgstr "Are you sure you want to reset all braille profiles? This cannot be undone."
+
+msgid "Confirm Reset"
+msgstr "Confirm Reset"
+
+# Profile dialog
+msgid "Braille Profile for {lang}"
+msgstr "Braille Profile for {lang}"
+
+msgid "Braille table &type:"
+msgstr "Braille table &type:"
+
+msgid "Braille &table:"
+msgstr "Braille &table:"
+
+# Table types
+msgid "Uncontracted"
+msgstr "Uncontracted"
+
+msgid "Contracted"
+msgstr "Contracted"
+
+msgid "Computer Braille"
+msgstr "Computer Braille"
+
+# Language format
+msgid "{lang} ({type})"
+msgstr "{lang} ({type})"
+
+# No tables message
+msgid "No tables available"
+msgstr "No tables available"

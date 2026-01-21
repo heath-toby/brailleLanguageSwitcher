@@ -1,0 +1,88 @@
+# -*- coding: UTF-8 -*-
+# Build script for BrailleLanguageSwitcher NVDA add-on
+# Requires: Python 3.11+, SCons
+
+import os
+import zipfile
+import re
+
+# Import build variables
+from buildVars import addon_info
+
+# Set construction environment
+env = Environment(ENV=os.environ)
+
+# Get addon info
+addonName = addon_info["addon_name"]
+addonVersion = addon_info["addon_version"]
+
+def generate_manifest(target, source, env):
+    """Generate manifest.ini from template."""
+    template_path = str(source[0])
+    output_path = str(target[0])
+
+    with open(template_path, 'r', encoding='utf-8') as f:
+        content = f.read()
+
+    # Replace placeholders
+    for key, value in addon_info.items():
+        placeholder = "{" + key + "}"
+        # Handle multiline descriptions
+        if isinstance(value, str):
+            value = value.replace('\n', '\n\t')
+        content = content.replace(placeholder, str(value))
+
+    with open(output_path, 'w', encoding='utf-8') as f:
+        f.write(content)
+
+    return None
+
+def build_addon(target, source, env):
+    """Build the NVDA add-on package."""
+    target_path = str(target[0])
+    addon_dir = "addon"
+
+    with zipfile.ZipFile(target_path, 'w', zipfile.ZIP_DEFLATED) as zf:
+        for root, dirs, files in os.walk(addon_dir):
+            for file in files:
+                file_path = os.path.join(root, file)
+                # Calculate archive name (relative path from addon/)
+                arc_name = os.path.relpath(file_path, addon_dir)
+                zf.write(file_path, arc_name)
+
+    print(f"Built: {target_path}")
+    return None
+
+# Generate manifest
+manifest = env.Command(
+    target="addon/manifest.ini",
+    source="manifest.ini.tpl",
+    action=generate_manifest
+)
+
+# Collect all addon source files as dependencies
+addon_files = []
+for root, dirs, files in os.walk("addon"):
+    for file in files:
+        if not file.endswith('.pyc') and not file == 'manifest.ini':
+            addon_files.append(os.path.join(root, file))
+
+# Build addon package
+addon_target = f"{addonName}-{addonVersion}.nvda-addon"
+addon = env.Command(
+    target=addon_target,
+    source=["addon/manifest.ini"] + addon_files,
+    action=build_addon
+)
+
+# Ensure manifest is built before addon
+env.Depends(addon, manifest)
+
+# Default target
+Default(addon)
+
+# Clean target
+Clean(addon, [
+    "addon/manifest.ini",
+    addon_target,
+])
