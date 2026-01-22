@@ -45,6 +45,9 @@ class BrailleLanguageSwitcherSettingsPanel(SettingsPanel):
 
         self._configManager = ConfigManager()
         self._tableManager = BrailleTableManager()
+        # Track initial state to detect changes
+        self._initialEnabled = self._configManager.enabled
+        self._initialEnabledLanguages = set(self._configManager.getEnabledLanguages())
         super().__init__(parent)
 
     def makeSettings(self, settingsSizer: wx.BoxSizer) -> None:
@@ -258,8 +261,21 @@ class BrailleLanguageSwitcherSettingsPanel(SettingsPanel):
 
     def onSave(self) -> None:
         """Save settings when OK is pressed."""
+        # Get current state
+        currentEnabled = self._enabledCheckBox.GetValue()
+        currentEnabledLanguages = set()
+        for index, langCode in enumerate(self._languageCodes):
+            if self._languageListBox.IsChecked(index):
+                currentEnabledLanguages.add(langCode)
+
+        # Check if anything changed
+        settingsChanged = (
+            currentEnabled != self._initialEnabled or
+            currentEnabledLanguages != self._initialEnabledLanguages
+        )
+
         # Save enabled state
-        self._configManager.enabled = self._enabledCheckBox.GetValue()
+        self._configManager.enabled = currentEnabled
 
         # Update enabled state for each language based on checkbox
         for index, langCode in enumerate(self._languageCodes):
@@ -271,14 +287,15 @@ class BrailleLanguageSwitcherSettingsPanel(SettingsPanel):
 
         log.debug("BrailleLanguageSwitcher: Settings saved")
 
-        # Show restart reminder dialog
-        # Translators: Message shown after saving settings
-        gui.messageBox(
-            _("Settings saved. Please restart NVDA for changes to take full effect."),
-            # Translators: Title of restart reminder dialog
-            _("Braille Language Switcher"),
-            wx.OK | wx.ICON_INFORMATION
-        )
+        # Only show restart reminder if settings actually changed
+        if settingsChanged:
+            # Translators: Message shown after saving settings
+            gui.messageBox(
+                _("Settings saved. Please restart NVDA for changes to take full effect."),
+                # Translators: Title of restart reminder dialog
+                _("Braille Language Switcher"),
+                wx.OK | wx.ICON_INFORMATION
+            )
 
 
 class BrailleProfileDialog(wx.Dialog):
