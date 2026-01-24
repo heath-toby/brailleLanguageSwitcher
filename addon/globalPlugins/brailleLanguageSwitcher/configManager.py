@@ -21,6 +21,7 @@ class ConfigManager:
 
     _defaultConfig: Dict[str, Any] = {
         "enabled": True,
+        "autoInputSwitching": True,
         "languageProfiles": {},
         "fallbackToDefault": True,
     }
@@ -79,6 +80,16 @@ class ConfigManager:
         """Set whether to fall back to default table for unconfigured languages."""
         self._config["fallbackToDefault"] = value
 
+    @property
+    def autoInputSwitching(self) -> bool:
+        """Get whether to automatically switch input tables along with output tables."""
+        return self._config.get("autoInputSwitching", True)
+
+    @autoInputSwitching.setter
+    def autoInputSwitching(self, value: bool) -> None:
+        """Set whether to automatically switch input tables along with output tables."""
+        self._config["autoInputSwitching"] = value
+
     def getLanguageProfile(self, langCode: str) -> Optional[Dict[str, Any]]:
         """
         Get the braille profile for a language code.
@@ -97,16 +108,18 @@ class ConfigManager:
         langCode: str,
         tableFileName: str,
         tableType: str,
-        enabled: bool = True
+        enabled: bool = True,
+        inputTableFileName: Optional[str] = None
     ) -> None:
         """
         Set the braille profile for a language.
 
         Args:
             langCode: ISO 639-1 language code
-            tableFileName: Name of the braille table file
+            tableFileName: Name of the braille output table file
             tableType: Type of table ("contracted", "uncontracted", "computer")
             enabled: Whether this profile is active
+            inputTableFileName: Name of the braille input table file (optional, defaults to output table)
         """
         if "languageProfiles" not in self._config:
             self._config["languageProfiles"] = {}
@@ -115,6 +128,7 @@ class ConfigManager:
             "enabled": enabled,
             "tableFileName": tableFileName,
             "tableType": tableType,
+            "inputTableFileName": inputTableFileName,
         }
 
     def removeLanguageProfile(self, langCode: str) -> None:

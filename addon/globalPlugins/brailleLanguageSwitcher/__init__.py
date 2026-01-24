@@ -5,21 +5,19 @@
 """
 BrailleLanguageSwitcher NVDA Add-on
 
-Automatically switches the default braille output table when language changes
-are detected in speech. The braille table stays changed until a new language
-is detected.
+Automatically switches the braille output table when language changes are
+detected from document language tags. Works independently of speech by
+hooking directly into braille region processing.
 """
 
 import globalPluginHandler
-import api
 import braille
+import brailleInput
 import brailleTables
 import config
-import gui
-import treeInterceptorHandler
 from gui.settingsDialogs import NVDASettingsDialog
 from logHandler import log
-from typing import Optional, List, Any
+from typing import Optional
 
 from .configManager import ConfigManager
 from .brailleTableManager import BrailleTableManager
@@ -28,6 +26,84 @@ from .settingsPanel import BrailleLanguageSwitcherSettingsPanel
 PLUGIN_NAME = "BrailleLanguageSwitcher"
 
 _globalPlugin: Optional["GlobalPlugin"] = None
+
+# Store original braille Region.update method for monkey-patching
+_originalBrailleRegionUpdate = None
+
+
+def _extractLanguageFromRegion(regionSelf):
+    """Extract language from a braille region by examining format fields.
+
+    This replicates the logic used in NVDA source modifications.
+    """
+    # 1. Check for _detectedLanguage attribute (set by modified NVDA or other add-ons)
+    detectedLang = getattr(regionSelf, "_detectedLanguage", None)
+    if detectedLang:
+        return detectedLang
+
+    # 2. For TextInfoRegion, get language from format fields
+    # Check if this is a TextInfoRegion by looking for _selection attribute
+    selection = getattr(regionSelf, "_selection", None)
+    if selection is None:
+        # Try _getSelection method
+        getSelection = getattr(regionSelf, "_getSelection", None)
+        if getSelection:
+            try:
+                selection = getSelection()
+            except Exception:
+                pass
+
+    if selection:
+        try:
+            from textInfos import FieldCommand
+            # Get text with format fields
+            fields = selection.getTextWithFields()
+            for field in fields:
+                if isinstance(field, FieldCommand):
+                    if field.command == "formatChange" and field.field:
+                        lang = field.field.get("language")
+                        if lang:
+                            return lang
+        except Exception as e:
+            log.debug(f"{PLUGIN_NAME}: Error extracting language from selection: {e}")
+
+    # 3. Try to get from the object's language property if available
+    obj = getattr(regionSelf, "obj", None)
+    if obj:
+        try:
+            # Some objects have a language property
+            lang = getattr(obj, "language", None)
+            if lang:
+                return lang
+        except Exception:
+            pass
+
+    return None
+
+
+def _patchedBrailleRegionUpdate(regionSelf, *args, **kwargs):
+    """Patched version of braille.Region.update that switches tables based on detected language.
+
+    This is a standalone function (not a method) that replaces braille.Region.update.
+    regionSelf is the braille Region instance.
+    """
+    global _globalPlugin
+
+    if _globalPlugin and _globalPlugin._configManager.enabled:
+        detectedLang = _extractLanguageFromRegion(regionSelf)
+
+        if detectedLang:
+            normalizedLang = _globalPlugin._normalizeLanguageCode(detectedLang)
+            if normalizedLang:
+                log.info(f"{PLUGIN_NAME}: Detected language '{detectedLang}' -> '{normalizedLang}'")
+                _globalPlugin._handleLanguageChange(normalizedLang)
+        elif _globalPlugin._currentLanguage is not None:
+            # No language detected, revert to default
+            _globalPlugin._revertToDefaultTables()
+            _globalPlugin._currentLanguage = None
+
+    # Call the original update method
+    return _originalBrailleRegionUpdate(regionSelf, *args, **kwargs)
 
 
 class GlobalPlugin(globalPluginHandler.GlobalPlugin):
@@ -42,11 +118,11 @@ class GlobalPlugin(globalPluginHandler.GlobalPlugin):
 
         self._configManager = ConfigManager()
         self._tableManager = BrailleTableManager()
-        self._originalTable = self._getCurrentTableFileName()
+        self._originalOutputTable = self._getCurrentOutputTableFileName()
+        self._originalInputTable = self._getCurrentInputTableFileName()
         self._currentLanguage: Optional[str] = None
         self._currentTable: Optional[str] = None
-        self._speechFilterRegistered = False
-        self._speechExtensionPoint = None
+        self._brailleHookInstalled = False
 
         # Register settings panel
         NVDASettingsDialog.categoryClasses.append(
@@ -54,7 +130,7 @@ class GlobalPlugin(globalPluginHandler.GlobalPlugin):
         )
 
         if self._configManager.enabled:
-            self._registerSpeechFilter()
+            self._installBrailleHook()
             log.info(f"{PLUGIN_NAME}: Started (enabled)")
         else:
             log.info(f"{PLUGIN_NAME}: Initialized but disabled")
@@ -73,7 +149,7 @@ class GlobalPlugin(globalPluginHandler.GlobalPlugin):
         except Exception:
             pass
 
-        self._unregisterSpeechFilter()
+        self._uninstallBrailleHook()
 
         try:
             NVDASettingsDialog.categoryClasses.remove(
@@ -82,124 +158,113 @@ class GlobalPlugin(globalPluginHandler.GlobalPlugin):
         except ValueError:
             pass
 
-        # Restore original table
-        if self._originalTable:
-            config.conf["braille"]["translationTable"] = self._originalTable
-            log.info(f"{PLUGIN_NAME}: Restored original table: {self._originalTable}")
+        # Restore original tables
+        if self._originalOutputTable:
+            try:
+                tableObj = brailleTables.getTable(self._originalOutputTable)
+                braille.handler.table = tableObj
+                log.info(f"{PLUGIN_NAME}: Restored original output table: {self._originalOutputTable}")
+            except LookupError:
+                pass
+
+        if self._originalInputTable:
+            try:
+                tableObj = brailleTables.getTable(self._originalInputTable)
+                brailleInput.handler.table = tableObj
+                log.info(f"{PLUGIN_NAME}: Restored original input table: {self._originalInputTable}")
+            except LookupError:
+                pass
 
         _globalPlugin = None
         log.info(f"{PLUGIN_NAME}: Terminated")
 
-    def _registerSpeechFilter(self) -> None:
-        """Register speech filter to detect language changes."""
-        if self._speechFilterRegistered:
+    def _installBrailleHook(self) -> None:
+        """Install the monkey-patch for braille language detection."""
+        global _originalBrailleRegionUpdate
+        if self._brailleHookInstalled:
             return
 
-        try:
-            try:
-                from speech import extensions
-                self._speechExtensionPoint = extensions.filter_speechSequence
-            except (ImportError, AttributeError):
-                pass
+        if _originalBrailleRegionUpdate is None:
+            _originalBrailleRegionUpdate = braille.Region.update
+            braille.Region.update = _patchedBrailleRegionUpdate
+            self._brailleHookInstalled = True
+            log.info(f"{PLUGIN_NAME}: Braille region hook installed")
 
-            if self._speechExtensionPoint is None:
-                import speech
-                if hasattr(speech, 'filter_speechSequence'):
-                    self._speechExtensionPoint = speech.filter_speechSequence
+    def _uninstallBrailleHook(self) -> None:
+        """Remove the monkey-patch for braille language detection."""
+        global _originalBrailleRegionUpdate
+        if _originalBrailleRegionUpdate is not None:
+            braille.Region.update = _originalBrailleRegionUpdate
+            _originalBrailleRegionUpdate = None
+            self._brailleHookInstalled = False
+            log.info(f"{PLUGIN_NAME}: Braille region hook removed")
 
-            if self._speechExtensionPoint:
-                self._speechExtensionPoint.register(self._speechFilter)
-                self._speechFilterRegistered = True
-                log.info(f"{PLUGIN_NAME}: Speech filter registered")
-        except Exception as e:
-            log.error(f"{PLUGIN_NAME}: Error registering speech filter: {e}")
+    def _handleLanguageChange(self, langCode: str) -> None:
+        """Handle a language change by switching braille tables if needed."""
+        if langCode == self._currentLanguage:
+            return  # No change
 
-    def _unregisterSpeechFilter(self) -> None:
-        if self._speechFilterRegistered and self._speechExtensionPoint:
-            try:
-                self._speechExtensionPoint.unregister(self._speechFilter)
-                self._speechFilterRegistered = False
-            except Exception:
-                pass
-
-    def _speechFilter(self, speechSequence: List[Any], *args, **kwargs) -> List[Any]:
-        """Detect language changes and switch braille table."""
-        if not self._configManager.enabled:
-            return speechSequence
-
-        try:
-            from speech.commands import LangChangeCommand
-
-            for item in speechSequence:
-                if isinstance(item, LangChangeCommand) and item.lang:
-                    normalizedLang = self._normalizeLanguageCode(item.lang)
-                    if normalizedLang and normalizedLang != self._currentLanguage:
-                        self._currentLanguage = normalizedLang
-                        self._switchBrailleTable(normalizedLang)
-
-        except Exception as e:
-            log.error(f"{PLUGIN_NAME}: Error in speech filter: {e}")
-
-        return speechSequence
-
-    def _switchBrailleTable(self, langCode: str) -> None:
-        """Switch the braille table for the given language."""
+        self._currentLanguage = langCode
         profile = self._configManager.getLanguageProfile(langCode)
-        newTable = None
 
         if profile and profile.get("enabled", False):
             tableFileName = profile.get("tableFileName")
-            if tableFileName and tableFileName != self._currentTable:
-                try:
-                    brailleTables.getTable(tableFileName)
-                    newTable = tableFileName
-                except LookupError:
-                    log.warning(f"{PLUGIN_NAME}: Table not found: {tableFileName}")
+            if tableFileName:
+                self._applyTableChange(tableFileName, langCode)
         elif self._configManager.fallbackToDefault:
-            if self._originalTable and self._currentTable != self._originalTable:
-                newTable = self._originalTable
-
-        if newTable:
-            self._currentTable = newTable
-            # Schedule the table change for after current processing
-            import wx
-            wx.CallAfter(self._applyTableChange, newTable, langCode)
+            self._revertToDefaultTables()
 
     def _applyTableChange(self, tableName: str, langCode: str) -> None:
-        """Apply the braille table change (called via wx.CallAfter)."""
+        """Apply the braille table change."""
+        if tableName == self._currentTable:
+            return  # Already using this table
+
         try:
-            # Get the BrailleTable object and set it directly on the handler
-            # This updates both handler._table AND config.conf automatically
             tableObj = brailleTables.getTable(tableName)
             braille.handler.table = tableObj
-            self._refreshBrailleDisplay()
-            log.info(f"{PLUGIN_NAME}: Applied braille table {tableName} for {langCode}")
+            self._currentTable = tableName
+            log.info(f"{PLUGIN_NAME}: Switched output table to {tableName} for {langCode}")
+
+            # Also switch input table if enabled
+            if self._configManager.autoInputSwitching:
+                profile = self._configManager.getLanguageProfile(langCode)
+                inputTable = profile.get("inputTableFileName") if profile else None
+                if not inputTable:
+                    # No specific input table configured, use the same as output
+                    inputTable = tableName
+
+                try:
+                    inputTableObj = brailleTables.getTable(inputTable)
+                    brailleInput.handler.table = inputTableObj
+                    log.info(f"{PLUGIN_NAME}: Switched input table to {inputTable} for {langCode}")
+                except LookupError:
+                    log.warning(f"{PLUGIN_NAME}: Input table not found: {inputTable}")
+
         except LookupError:
             log.error(f"{PLUGIN_NAME}: Table not found: {tableName}")
         except Exception as e:
             log.error(f"{PLUGIN_NAME}: Error applying table change: {e}")
 
-    def _refreshBrailleDisplay(self) -> None:
-        """Refresh the braille display to apply table changes.
+    def _revertToDefaultTables(self) -> None:
+        """Revert braille tables to the user's configured defaults."""
+        if self._originalOutputTable and self._currentTable != self._originalOutputTable:
+            try:
+                tableObj = brailleTables.getTable(self._originalOutputTable)
+                braille.handler.table = tableObj
+                self._currentTable = self._originalOutputTable
+                log.info(f"{PLUGIN_NAME}: Reverted output table to default: {self._originalOutputTable}")
+            except LookupError:
+                log.warning(f"{PLUGIN_NAME}: Default output table not found: {self._originalOutputTable}")
 
-        Uses the same technique as BrailleExtender: update tree interceptor
-        and re-trigger handleGainFocus on the current focus object.
-        """
-        try:
-            focus = api.getFocusObject()
-            if focus is None:
-                return
-
-            # Update tree interceptor if present (matches BrailleExtender approach)
-            if focus.treeInterceptor is not None:
-                ti = treeInterceptorHandler.update(focus)
-                if ti and not ti.passThrough:
-                    braille.handler.handleGainFocus(ti)
-                    return
-
-            braille.handler.handleGainFocus(focus)
-        except Exception as e:
-            log.debug(f"{PLUGIN_NAME}: Error refreshing braille display: {e}")
+        if self._configManager.autoInputSwitching and self._originalInputTable:
+            try:
+                currentInputTable = brailleInput.handler.table.fileName if brailleInput.handler.table else None
+                if currentInputTable != self._originalInputTable:
+                    inputTableObj = brailleTables.getTable(self._originalInputTable)
+                    brailleInput.handler.table = inputTableObj
+                    log.info(f"{PLUGIN_NAME}: Reverted input table to default: {self._originalInputTable}")
+            except LookupError:
+                log.warning(f"{PLUGIN_NAME}: Default input table not found: {self._originalInputTable}")
 
     def _normalizeLanguageCode(self, lang: str) -> Optional[str]:
         if not lang:
@@ -214,21 +279,29 @@ class GlobalPlugin(globalPluginHandler.GlobalPlugin):
     def _onConfigProfileSwitch(self) -> None:
         self._configManager.load()
         if self._configManager.enabled:
-            self._registerSpeechFilter()
+            self._installBrailleHook()
         else:
-            self._unregisterSpeechFilter()
-            if self._originalTable:
-                config.conf["braille"]["translationTable"] = self._originalTable
+            self._uninstallBrailleHook()
+            self._revertToDefaultTables()
 
-    def _getCurrentTableFileName(self) -> str:
+    def _getCurrentOutputTableFileName(self) -> str:
+        """Get the current output braille table filename."""
         table = config.conf["braille"]["translationTable"]
         if table == "auto":
             table = brailleTables.getDefaultTableForCurLang(brailleTables.TableType.OUTPUT)
         return table
 
+    def _getCurrentInputTableFileName(self) -> str:
+        """Get the current input braille table filename."""
+        table = config.conf["braille"]["inputTable"]
+        if table == "auto":
+            table = brailleTables.getDefaultTableForCurLang(brailleTables.TableType.INPUT)
+        return table
+
     def reloadConfiguration(self) -> None:
         self._configManager.load()
         if self._configManager.enabled:
-            self._registerSpeechFilter()
+            self._installBrailleHook()
         else:
-            self._unregisterSpeechFilter()
+            self._uninstallBrailleHook()
+            self._revertToDefaultTables()

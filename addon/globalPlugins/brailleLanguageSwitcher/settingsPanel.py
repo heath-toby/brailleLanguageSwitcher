@@ -70,6 +70,15 @@ class BrailleLanguageSwitcherSettingsPanel(SettingsPanel):
         self._enabledCheckBox.SetValue(self._configManager.enabled)
         self._enabledCheckBox.Bind(wx.EVT_CHECKBOX, self._onEnabledToggle)
 
+        # Translators: Checkbox to enable input table switching
+        self._inputSwitchingCheckBox = sHelper.addItem(
+            wx.CheckBox(
+                self,
+                label=_("Also switch &input table when language changes")
+            )
+        )
+        self._inputSwitchingCheckBox.SetValue(self._configManager.autoInputSwitching)
+
         # Language configuration panel (shown/hidden based on enabled state)
         self._languagePanel = wx.Panel(self)
         langPanelSizer = wx.BoxSizer(wx.VERTICAL)
@@ -121,32 +130,15 @@ class BrailleLanguageSwitcherSettingsPanel(SettingsPanel):
         langPanelSizer.Add(buttonPanel, flag=wx.BOTTOM, border=10)
 
         # Status text
-        # Translators: Status text showing Enhanced Language Switching integration
-        elsStatus = (
-            _("Enhanced Language Switching: Available")
-            if self._isEnhancedLanguageSwitchingAvailable()
-            else _("Enhanced Language Switching: Not installed (using native detection)")
-        )
-        self._statusText = wx.StaticText(self._languagePanel, label=elsStatus)
+        # Translators: Status text explaining how language detection works
+        statusText = _("Uses document language tags for braille table switching")
+        self._statusText = wx.StaticText(self._languagePanel, label=statusText)
         langPanelSizer.Add(self._statusText, flag=wx.TOP, border=5)
 
         sHelper.addItem(self._languagePanel, flag=wx.EXPAND)
 
         # Update visibility based on enabled state
         self._updatePanelVisibility()
-
-    def _isEnhancedLanguageSwitchingAvailable(self) -> bool:
-        """Check if Enhanced Language Switching add-on is installed."""
-        try:
-            from globalPlugins import enhancedLanguageDetection
-            return True
-        except ImportError:
-            pass
-        try:
-            from globalPlugins import enhanced_language_switching
-            return True
-        except ImportError:
-            return False
 
     def _populateLanguageList(self) -> None:
         """Populate the language list with available languages."""
@@ -276,6 +268,7 @@ class BrailleLanguageSwitcherSettingsPanel(SettingsPanel):
 
         # Save enabled state
         self._configManager.enabled = currentEnabled
+        self._configManager.autoInputSwitching = self._inputSwitchingCheckBox.GetValue()
 
         # Update enabled state for each language based on checkbox
         for index, langCode in enumerate(self._languageCodes):
@@ -336,6 +329,7 @@ class BrailleProfileDialog(wx.Dialog):
         self._tableManager = tableManager
         self._configManager = configManager
         self._tableFileNames: List[str] = []
+        self._inputTableFileNames: List[str] = []
 
         self._initUI()
         self._loadExistingProfile()
@@ -366,9 +360,9 @@ class BrailleProfileDialog(wx.Dialog):
         self._tableTypeCombo.SetSelection(0)
         self._tableTypeCombo.Bind(wx.EVT_CHOICE, self._onTableTypeChanged)
 
-        # Specific table selection
-        # Translators: Label for braille table selection
-        tableLabel = _("Braille &table:")
+        # Specific output table selection
+        # Translators: Label for braille output table selection
+        tableLabel = _("&Output table:")
         self._tableCombo = sHelper.addLabeledControl(
             tableLabel,
             wx.Choice,
@@ -377,6 +371,28 @@ class BrailleProfileDialog(wx.Dialog):
 
         # Populate tables for current type
         self._populateTables()
+
+        # Input table selection
+        # Translators: Label for input table type selection
+        inputTableTypeLabel = _("Input table t&ype:")
+        self._inputTableTypeCombo = sHelper.addLabeledControl(
+            inputTableTypeLabel,
+            wx.Choice,
+            choices=self._tableTypeChoices
+        )
+        self._inputTableTypeCombo.SetSelection(0)
+        self._inputTableTypeCombo.Bind(wx.EVT_CHOICE, self._onInputTableTypeChanged)
+
+        # Translators: Label for braille input table selection
+        inputTableLabel = _("&Input table:")
+        self._inputTableCombo = sHelper.addLabeledControl(
+            inputTableLabel,
+            wx.Choice,
+            choices=[]
+        )
+
+        # Populate input tables
+        self._populateInputTables()
 
         # Dialog buttons
         buttonSizer = wx.StdDialogButtonSizer()
@@ -402,7 +418,7 @@ class BrailleProfileDialog(wx.Dialog):
         mainSizer.Fit(self)
 
     def _populateTables(self) -> None:
-        """Populate table combo based on selected type."""
+        """Populate output table combo based on selected type."""
         tableTypeIndex = self._tableTypeCombo.GetSelection()
 
         # Get tables for this language and type
@@ -428,11 +444,43 @@ class BrailleProfileDialog(wx.Dialog):
             # Translators: Message shown when no tables are available
             self._tableCombo.Append(_("No tables available"))
 
+    def _populateInputTables(self) -> None:
+        """Populate input table combo based on selected type."""
+        tableTypeIndex = self._inputTableTypeCombo.GetSelection()
+
+        # Get tables for this language and type
+        tables = self._tableManager.getTablesForLanguage(
+            self._langCode,
+            tableTypeIndex
+        )
+
+        self._inputTableCombo.Clear()
+        self._inputTableFileNames = []
+
+        # Add option to use same as output
+        # Translators: Option to use same table as output for input
+        self._inputTableCombo.Append(_("(Same as output table)"))
+        self._inputTableFileNames.append(None)
+
+        if not tables:
+            # Also try getting all tables for this language
+            tables = self._tableManager.getTablesForLanguage(self._langCode, None)
+
+        for table in tables:
+            self._inputTableCombo.Append(table.displayName)
+            self._inputTableFileNames.append(table.fileName)
+
+        self._inputTableCombo.SetSelection(0)
+
+    def _onInputTableTypeChanged(self, evt: wx.CommandEvent) -> None:
+        """Handle input table type selection change."""
+        self._populateInputTables()
+
     def _loadExistingProfile(self) -> None:
         """Load existing profile settings if available."""
         profile = self._configManager.getLanguageProfile(self._langCode)
         if profile:
-            # Set table type
+            # Set output table type
             tableType = profile.get("tableType", "uncontracted")
             typeIndex = {
                 "uncontracted": 0,
@@ -441,14 +489,24 @@ class BrailleProfileDialog(wx.Dialog):
             }.get(tableType, 0)
             self._tableTypeCombo.SetSelection(typeIndex)
 
-            # Refresh table list for this type
+            # Refresh output table list for this type
             self._populateTables()
 
-            # Select the configured table
+            # Select the configured output table
             tableFileName = profile.get("tableFileName")
             if tableFileName and tableFileName in self._tableFileNames:
                 tableIndex = self._tableFileNames.index(tableFileName)
                 self._tableCombo.SetSelection(tableIndex)
+
+            # Load input table settings
+            inputTableFileName = profile.get("inputTableFileName")
+            if inputTableFileName:
+                # Refresh input table list
+                self._populateInputTables()
+                # Try to find and select the input table
+                if inputTableFileName in self._inputTableFileNames:
+                    inputIndex = self._inputTableFileNames.index(inputTableFileName)
+                    self._inputTableCombo.SetSelection(inputIndex)
 
     def _onTableTypeChanged(self, evt: wx.CommandEvent) -> None:
         """Handle table type selection change."""
@@ -464,17 +522,24 @@ class BrailleProfileDialog(wx.Dialog):
         if tableIndex != wx.NOT_FOUND and tableIndex < len(self._tableFileNames):
             tableFileName = self._tableFileNames[tableIndex]
 
+            # Get input table selection (None means use same as output)
+            inputTableIndex = self._inputTableCombo.GetSelection()
+            inputTableFileName = None
+            if inputTableIndex != wx.NOT_FOUND and inputTableIndex < len(self._inputTableFileNames):
+                inputTableFileName = self._inputTableFileNames[inputTableIndex]
+
             # Save the profile
             self._configManager.setLanguageProfile(
                 self._langCode,
                 tableFileName,
                 tableType,
-                enabled=True
+                enabled=True,
+                inputTableFileName=inputTableFileName
             )
 
             log.debug(
                 f"BrailleLanguageSwitcher: Set profile for {self._langCode}: "
-                f"{tableType} / {tableFileName}"
+                f"{tableType} / {tableFileName} (input: {inputTableFileName})"
             )
 
         self.EndModal(wx.ID_OK)
