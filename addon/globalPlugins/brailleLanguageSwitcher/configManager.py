@@ -22,6 +22,8 @@ class ConfigManager:
     _defaultConfig: Dict[str, Any] = {
         "enabled": True,
         "autoInputSwitching": True,
+        "useEnhancedDetection": False,
+        "minWordThreshold": 3,
         "languageProfiles": {},
         "fallbackToDefault": True,
     }
@@ -89,6 +91,26 @@ class ConfigManager:
     def autoInputSwitching(self, value: bool) -> None:
         """Set whether to automatically switch input tables along with output tables."""
         self._config["autoInputSwitching"] = value
+
+    @property
+    def useEnhancedDetection(self) -> bool:
+        """Get whether to use Enhanced Language Detection for text-based detection."""
+        return self._config.get("useEnhancedDetection", False)
+
+    @useEnhancedDetection.setter
+    def useEnhancedDetection(self, value: bool) -> None:
+        """Set whether to use Enhanced Language Detection for text-based detection."""
+        self._config["useEnhancedDetection"] = value
+
+    @property
+    def minWordThreshold(self) -> int:
+        """Get minimum word count threshold for Enhanced Language Detection."""
+        return self._config.get("minWordThreshold", 3)
+
+    @minWordThreshold.setter
+    def minWordThreshold(self, value: int) -> None:
+        """Set minimum word count threshold for Enhanced Language Detection."""
+        self._config["minWordThreshold"] = max(1, value)  # Minimum of 1
 
     def getLanguageProfile(self, langCode: str) -> Optional[Dict[str, Any]]:
         """

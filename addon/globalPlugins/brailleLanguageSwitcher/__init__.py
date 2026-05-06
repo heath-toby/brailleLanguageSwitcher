@@ -6,8 +6,8 @@
 BrailleLanguageSwitcher NVDA Add-on
 
 Automatically switches the braille output table when language changes are
-detected from document language tags. Works independently of speech by
-hooking directly into braille region processing.
+detected from document language tags or Enhanced Language Detection.
+Works independently of speech by hooking directly into braille region processing.
 """
 
 import globalPluginHandler
@@ -15,6 +15,7 @@ import braille
 import brailleInput
 import brailleTables
 import config
+import gui
 from gui.settingsDialogs import NVDASettingsDialog
 from logHandler import log
 from typing import Optional
@@ -30,11 +31,114 @@ _globalPlugin: Optional["GlobalPlugin"] = None
 # Store original braille Region.update method for monkey-patching
 _originalBrailleRegionUpdate = None
 
+# Enhanced Language Detection integration
+_enhancedLangDetectionAvailable = False
+_elsDetectLanguage = None
+_elsDetectLanguageWithLingua = None
+_elsModule = None
 
-def _extractLanguageFromRegion(regionSelf):
-    """Extract language from a braille region by examining format fields.
+def _initEnhancedLanguageDetection():
+    """Try to import Enhanced Language Detection add-on functions."""
+    global _enhancedLangDetectionAvailable, _elsDetectLanguage, _elsDetectLanguageWithLingua, _elsModule
 
-    This replicates the logic used in NVDA source modifications.
+    try:
+        from globalPlugins import enhancedLanguageDetection
+        _elsModule = enhancedLanguageDetection
+        _elsDetectLanguage = enhancedLanguageDetection.detectLanguage
+        _elsDetectLanguageWithLingua = enhancedLanguageDetection.detectLanguageWithLingua
+        _enhancedLangDetectionAvailable = True
+        log.info(f"{PLUGIN_NAME}: Enhanced Language Detection add-on found and integrated")
+        return True
+    except ImportError:
+        pass
+
+    try:
+        from globalPlugins import enhanced_language_switching
+        _elsModule = enhanced_language_switching
+        _elsDetectLanguage = enhanced_language_switching.detectLanguage
+        _elsDetectLanguageWithLingua = enhanced_language_switching.detectLanguageWithLingua
+        _enhancedLangDetectionAvailable = True
+        log.info(f"{PLUGIN_NAME}: Enhanced Language Detection add-on found (alt name)")
+        return True
+    except ImportError:
+        pass
+
+    _enhancedLangDetectionAvailable = False
+    log.info(f"{PLUGIN_NAME}: Enhanced Language Detection not available, using document tags only")
+    return False
+
+
+def isEnhancedLanguageDetectionAvailable() -> bool:
+    """Check if Enhanced Language Detection add-on is available.
+
+    This can be called from the settings panel to determine whether to
+    enable the integration option.
+    """
+    return _enhancedLangDetectionAvailable
+
+
+def _detectLanguageWithThreshold(text: str, minWords: int = 3) -> Optional[str]:
+    """
+    Detect language using Enhanced Language Detection, but only return
+    a language if enough words are detected as that language.
+
+    Args:
+        text: The text to analyze
+        minWords: Minimum number of words required to trigger a language switch
+
+    Returns:
+        Language code if threshold met, None otherwise
+    """
+    if not _enhancedLangDetectionAvailable or not text:
+        return None
+
+    # Split text into words
+    words = text.split()
+    if len(words) < minWords:
+        return None
+
+    # Get the configured model from Enhanced Language Detection
+    try:
+        model = config.conf["enhancedLanguageDetection"]["model"]
+    except KeyError:
+        model = 1  # Default to langdetect
+
+    # Detect language of the full text
+    detectedLang = None
+    try:
+        if model == 0 and _elsDetectLanguageWithLingua:
+            # Use lingua
+            detectedLang = _elsDetectLanguageWithLingua(text)
+        elif _elsDetectLanguage:
+            # Use langdetect
+            detectedLang = _elsDetectLanguage(text)
+    except Exception as e:
+        log.debug(f"{PLUGIN_NAME}: Error detecting language: {e}")
+        return None
+
+    if not detectedLang:
+        return None
+
+    # Normalize the language code
+    detectedLang = detectedLang.lower()
+
+    log.debug(f"{PLUGIN_NAME}: Detected language '{detectedLang}' for text with {len(words)} words")
+    return detectedLang
+
+
+def _extractLanguageFromRegion(regionSelf, configManager):
+    """Extract language from a braille region.
+
+    Tries multiple methods:
+    1. Document language tags (formatChange fields)
+    2. Enhanced Language Detection (if enabled and available)
+
+    Args:
+        regionSelf: The braille region
+        configManager: ConfigManager instance for settings
+
+    Returns:
+        Detected language code or None
     """
     # 1. Check for _detectedLanguage attribute (set by modified NVDA or other add-ons)
     detectedLang = getattr(regionSelf, "_detectedLanguage", None)
@@ -42,10 +146,8 @@ def _extractLanguageFromRegion(regionSelf):
         return detectedLang
 
     # 2. For TextInfoRegion, get language from format fields
-    # Check if this is a TextInfoRegion by looking for _selection attribute
     selection = getattr(regionSelf, "_selection", None)
     if selection is None:
-        # Try _getSelection method
         getSelection = getattr(regionSelf, "_getSelection", None)
         if getSelection:
             try:
@@ -56,7 +158,6 @@ def _extractLanguageFromRegion(regionSelf):
     if selection:
         try:
             from textInfos import FieldCommand
-            # Get text with format fields
             fields = selection.getTextWithFields()
             for field in fields:
                 if isinstance(field, FieldCommand):
@@ -67,16 +168,25 @@ def _extractLanguageFromRegion(regionSelf):
         except Exception as e:
             log.debug(f"{PLUGIN_NAME}: Error extracting language from selection: {e}")
 
-    # 3. Try to get from the object's language property if available
+    # 3. Try to get from the object's language property
     obj = getattr(regionSelf, "obj", None)
     if obj:
         try:
-            # Some objects have a language property
             lang = getattr(obj, "language", None)
             if lang:
                 return lang
         except Exception:
             pass
+
+    # 4. If Enhanced Language Detection is enabled, try text-based detection
+    if configManager.useEnhancedDetection and _enhancedLangDetectionAvailable:
+        rawText = getattr(regionSelf, "rawText", None)
+        if rawText:
+            minWords = configManager.minWordThreshold
+            detectedLang = _detectLanguageWithThreshold(rawText, minWords)
+            if detectedLang:
+                log.debug(f"{PLUGIN_NAME}: Enhanced detection found language '{detectedLang}'")
+                return detectedLang
 
     return None
 
@@ -90,7 +200,7 @@ def _patchedBrailleRegionUpdate(regionSelf, *args, **kwargs):
     global _globalPlugin
 
     if _globalPlugin and _globalPlugin._configManager.enabled:
-        detectedLang = _extractLanguageFromRegion(regionSelf)
+        detectedLang = _extractLanguageFromRegion(regionSelf, _globalPlugin._configManager)
 
         if detectedLang:
             normalizedLang = _globalPlugin._normalizeLanguageCode(detectedLang)
@@ -123,6 +233,27 @@ class GlobalPlugin(globalPluginHandler.GlobalPlugin):
         self._currentLanguage: Optional[str] = None
         self._currentTable: Optional[str] = None
         self._brailleHookInstalled = False
+
+        # Try to initialize Enhanced Language Detection integration
+        _initEnhancedLanguageDetection()
+
+        # If enhanced detection was enabled but the add-on is missing, auto-disable and warn
+        if self._configManager.useEnhancedDetection and not _enhancedLangDetectionAvailable:
+            self._configManager.useEnhancedDetection = False
+            self._configManager.save()
+            log.warning(f"{PLUGIN_NAME}: Enhanced Language Detection not found at startup, integration disabled")
+            import wx
+            wx.CallAfter(
+                gui.messageBox,
+                # Translators: Warning when Enhanced Language Detection add-on was removed
+                _("Enhanced Language Detection add-on could not be found. "
+                  "Text-based language detection has been automatically disabled.\n\n"
+                  "Only document language tags will be used for detection. "
+                  "Install the Enhanced Language Detection add-on to re-enable this feature."),
+                # Translators: Title of warning dialog
+                _("Braille Language Switcher"),
+                wx.OK | wx.ICON_WARNING
+            )
 
         # Register settings panel
         NVDASettingsDialog.categoryClasses.append(
@@ -299,9 +430,36 @@ class GlobalPlugin(globalPluginHandler.GlobalPlugin):
         return table
 
     def reloadConfiguration(self) -> None:
+        """Reload configuration and apply changes immediately."""
         self._configManager.load()
+
+        # Re-check Enhanced Language Detection availability
+        _initEnhancedLanguageDetection()
+
+        # If enhanced detection was enabled but the add-on is no longer available,
+        # automatically disable the setting and warn the user
+        if self._configManager.useEnhancedDetection and not _enhancedLangDetectionAvailable:
+            self._configManager.useEnhancedDetection = False
+            self._configManager.save()
+            log.warning(f"{PLUGIN_NAME}: Enhanced Language Detection not found, integration disabled")
+            import wx
+            import gui
+            wx.CallAfter(
+                gui.messageBox,
+                # Translators: Warning when Enhanced Language Detection add-on was removed
+                _("Enhanced Language Detection add-on could not be found. "
+                  "Text-based language detection has been automatically disabled.\n\n"
+                  "Only document language tags will be used for detection. "
+                  "Install the Enhanced Language Detection add-on to re-enable this feature."),
+                # Translators: Title of warning dialog
+                _("Braille Language Switcher"),
+                wx.OK | wx.ICON_WARNING
+            )
+
         if self._configManager.enabled:
             self._installBrailleHook()
+            log.info(f"{PLUGIN_NAME}: Reloaded - enabled")
         else:
             self._uninstallBrailleHook()
             self._revertToDefaultTables()
+            log.info(f"{PLUGIN_NAME}: Reloaded - disabled")

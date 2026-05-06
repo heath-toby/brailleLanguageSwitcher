@@ -79,6 +79,33 @@ class BrailleLanguageSwitcherSettingsPanel(SettingsPanel):
         )
         self._inputSwitchingCheckBox.SetValue(self._configManager.autoInputSwitching)
 
+        # Enhanced Language Detection integration - only show if the add-on is installed
+        from . import isEnhancedLanguageDetectionAvailable
+        self._enhancedAvailable = isEnhancedLanguageDetectionAvailable()
+
+        if self._enhancedAvailable:
+            # Translators: Checkbox to enable Enhanced Language Detection integration
+            self._useEnhancedCheckBox = sHelper.addItem(
+                wx.CheckBox(
+                    self,
+                    label=_("Use Enhanced Language &Detection for text-based detection")
+                )
+            )
+            self._useEnhancedCheckBox.SetValue(self._configManager.useEnhancedDetection)
+
+            # Minimum word threshold
+            # Translators: Label for minimum word threshold spin control
+            self._wordThresholdCtrl = sHelper.addLabeledControl(
+                _("Minimum &words required to switch language:"),
+                wx.SpinCtrl,
+                min=1,
+                max=50,
+                initial=self._configManager.minWordThreshold
+            )
+        else:
+            self._useEnhancedCheckBox = None
+            self._wordThresholdCtrl = None
+
         # Language configuration panel (shown/hidden based on enabled state)
         self._languagePanel = wx.Panel(self)
         langPanelSizer = wx.BoxSizer(wx.VERTICAL)
@@ -130,8 +157,12 @@ class BrailleLanguageSwitcherSettingsPanel(SettingsPanel):
         langPanelSizer.Add(buttonPanel, flag=wx.BOTTOM, border=10)
 
         # Status text
-        # Translators: Status text explaining how language detection works
-        statusText = _("Uses document language tags for braille table switching")
+        if self._enhancedAvailable:
+            # Translators: Status text when Enhanced Language Detection is available
+            statusText = _("Enhanced Language Detection: Available")
+        else:
+            # Translators: Status text when Enhanced Language Detection is not installed
+            statusText = _("Enhanced Language Detection: Not installed (document tags only)")
         self._statusText = wx.StaticText(self._languagePanel, label=statusText)
         langPanelSizer.Add(self._statusText, flag=wx.TOP, border=5)
 
@@ -270,6 +301,12 @@ class BrailleLanguageSwitcherSettingsPanel(SettingsPanel):
         self._configManager.enabled = currentEnabled
         self._configManager.autoInputSwitching = self._inputSwitchingCheckBox.GetValue()
 
+        # Only save enhanced detection settings if the controls exist
+        if self._useEnhancedCheckBox is not None:
+            self._configManager.useEnhancedDetection = self._useEnhancedCheckBox.GetValue()
+        if self._wordThresholdCtrl is not None:
+            self._configManager.minWordThreshold = self._wordThresholdCtrl.GetValue()
+
         # Update enabled state for each language based on checkbox
         for index, langCode in enumerate(self._languageCodes):
             isChecked = self._languageListBox.IsChecked(index)
@@ -280,15 +317,13 @@ class BrailleLanguageSwitcherSettingsPanel(SettingsPanel):
 
         log.debug("BrailleLanguageSwitcher: Settings saved")
 
-        # Only show restart reminder if settings actually changed
-        if settingsChanged:
-            # Translators: Message shown after saving settings
-            gui.messageBox(
-                _("Settings saved. Please restart NVDA for changes to take full effect."),
-                # Translators: Title of restart reminder dialog
-                _("Braille Language Switcher"),
-                wx.OK | wx.ICON_INFORMATION
-            )
+    def postSave(self) -> None:
+        """Called by NVDA after settings are saved - apply changes immediately."""
+        # Get the global plugin instance and tell it to reload
+        from . import _globalPlugin
+        if _globalPlugin:
+            _globalPlugin.reloadConfiguration()
+            log.debug("BrailleLanguageSwitcher: Configuration reloaded")
 
 
 class BrailleProfileDialog(wx.Dialog):
