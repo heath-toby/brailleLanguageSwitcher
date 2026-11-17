@@ -11,6 +11,14 @@ from logHandler import log
 
 CONFIG_FILE_NAME = "brailleLanguageSwitcher.json"
 
+#: Each language on a line is shown in its own table; the input table follows the language at the cursor.
+SOURCE_MIXED = "mixed"
+#: Braille follows the language the voice is switched to, whatever detected it.
+SOURCE_SPEECH = "speech"
+#: Braille text is checked on its own: document language tags and Enhanced Language Detection.
+SOURCE_TEXT = "text"
+LANGUAGE_SOURCES = (SOURCE_MIXED, SOURCE_SPEECH, SOURCE_TEXT)
+
 
 class ConfigManager:
     """
@@ -21,6 +29,7 @@ class ConfigManager:
 
     _defaultConfig: Dict[str, Any] = {
         "enabled": True,
+        "languageSource": SOURCE_MIXED,
         "autoInputSwitching": True,
         "useEnhancedDetection": False,
         "minWordThreshold": 3,
@@ -73,6 +82,16 @@ class ConfigManager:
         self._config["enabled"] = value
 
     @property
+    def languageSource(self) -> str:
+        """Where the language comes from: SOURCE_MIXED, SOURCE_SPEECH or SOURCE_TEXT."""
+        source = self._config.get("languageSource", SOURCE_MIXED)
+        return source if source in LANGUAGE_SOURCES else SOURCE_MIXED
+
+    @languageSource.setter
+    def languageSource(self, value: str) -> None:
+        self._config["languageSource"] = value if value in LANGUAGE_SOURCES else SOURCE_MIXED
+
+    @property
     def fallbackToDefault(self) -> bool:
         """Get whether to fall back to default table for unconfigured languages."""
         return self._config.get("fallbackToDefault", True)
@@ -104,7 +123,7 @@ class ConfigManager:
 
     @property
     def minWordThreshold(self) -> int:
-        """Get minimum word count threshold for Enhanced Language Detection."""
+        """Minimum words a piece of text needs before braille switches language for it."""
         return self._config.get("minWordThreshold", 3)
 
     @minWordThreshold.setter

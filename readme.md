@@ -45,7 +45,8 @@ brailleLanguageSwitcher/
 │   │   └── brailleLanguageSwitcher/
 │   │       ├── __init__.py           # GlobalPlugin class
 │   │       ├── configManager.py      # Configuration persistence
-│   │       ├── languageDetector.py   # Language detection
+│   │       ├── mixedBraille.py       # Each language in its own table
+│   │       ├── speechLanguage.py     # Follows the speech language
 │   │       ├── brailleTableManager.py # Table enumeration
 │   │       └── settingsPanel.py      # Settings UI
 │   └── locale/                       # Translations

@@ -79,32 +79,53 @@ class BrailleLanguageSwitcherSettingsPanel(SettingsPanel):
         )
         self._inputSwitchingCheckBox.SetValue(self._configManager.autoInputSwitching)
 
-        # Enhanced Language Detection integration - only show if the add-on is installed
-        from . import isEnhancedLanguageDetectionAvailable
+        from .configManager import SOURCE_MIXED, SOURCE_SPEECH, SOURCE_TEXT
+        from . import isEnhancedLanguageDetectionAvailable, isDialingoAvailable
         self._enhancedAvailable = isEnhancedLanguageDetectionAvailable()
+        self._dialingoAvailable = isDialingoAvailable()
 
+        # Where the language comes from
+        self._sourceValues = [SOURCE_MIXED, SOURCE_SPEECH, SOURCE_TEXT]
+        sourceLabels = [
+            # Translators: Language source choice: every language on a line in its own braille table
+            _("Show each language in its own table (Dialingo, Enhanced Language Detection)"),
+            # Translators: Language source choice: braille follows the voice, whatever switched it
+            _("Follow the speech language (Dialingo, Enhanced Language Detection, document tags)"),
+            # Translators: Language source choice: braille text is checked on its own
+            _("Check the braille text (document tags, Enhanced Language Detection)"),
+        ]
+        # Translators: Label for the language source combo box
+        self._sourceChoice = sHelper.addLabeledControl(
+            _("Language &source:"),
+            wx.Choice,
+            choices=sourceLabels
+        )
+        self._sourceChoice.SetSelection(self._sourceValues.index(self._configManager.languageSource))
+        self._sourceChoice.Bind(wx.EVT_CHOICE, self._onSourceChanged)
+
+        # Enhanced Language Detection integration - only show if the add-on is installed
         if self._enhancedAvailable:
             # Translators: Checkbox to enable Enhanced Language Detection integration
             self._useEnhancedCheckBox = sHelper.addItem(
                 wx.CheckBox(
                     self,
-                    label=_("Use Enhanced Language &Detection for text-based detection")
+                    label=_("Use Enhanced Language &Detection on the braille text")
                 )
             )
             self._useEnhancedCheckBox.SetValue(self._configManager.useEnhancedDetection)
-
-            # Minimum word threshold
-            # Translators: Label for minimum word threshold spin control
-            self._wordThresholdCtrl = sHelper.addLabeledControl(
-                _("Minimum &words required to switch language:"),
-                wx.SpinCtrl,
-                min=1,
-                max=50,
-                initial=self._configManager.minWordThreshold
-            )
         else:
             self._useEnhancedCheckBox = None
-            self._wordThresholdCtrl = None
+
+        # Minimum word threshold, used by both sources
+        # Translators: Label for minimum word threshold spin control
+        self._wordThresholdCtrl = sHelper.addLabeledControl(
+            _("Minimum &words required to switch language:"),
+            wx.SpinCtrl,
+            min=1,
+            max=50,
+            initial=self._configManager.minWordThreshold
+        )
+        self._updateSourceControls()
 
         # Language configuration panel (shown/hidden based on enabled state)
         self._languagePanel = wx.Panel(self)
@@ -156,13 +177,20 @@ class BrailleLanguageSwitcherSettingsPanel(SettingsPanel):
 
         langPanelSizer.Add(buttonPanel, flag=wx.BOTTOM, border=10)
 
-        # Status text
+        # Status text: which language detectors are installed
+        detectors = []
+        if self._dialingoAvailable:
+            # Translators: Name of the Dialingo add-on in the status line
+            detectors.append(_("Dialingo"))
         if self._enhancedAvailable:
-            # Translators: Status text when Enhanced Language Detection is available
-            statusText = _("Enhanced Language Detection: Available")
+            # Translators: Name of the Enhanced Language Detection add-on in the status line
+            detectors.append(_("Enhanced Language Detection"))
+        if detectors:
+            # Translators: Status text listing the installed language detection add-ons
+            statusText = _("Language detection add-ons found: {names}").format(names=", ".join(detectors))
         else:
-            # Translators: Status text when Enhanced Language Detection is not installed
-            statusText = _("Enhanced Language Detection: Not installed (document tags only)")
+            # Translators: Status text when no language detection add-on is installed
+            statusText = _("No language detection add-on found: only document language tags are used")
         self._statusText = wx.StaticText(self._languagePanel, label=statusText)
         langPanelSizer.Add(self._statusText, flag=wx.TOP, border=5)
 
@@ -226,6 +254,16 @@ class BrailleLanguageSwitcherSettingsPanel(SettingsPanel):
         isEnabled = self._enabledCheckBox.GetValue()
         self._languagePanel.Show(isEnabled)
         self._languagePanel.GetParent().Layout()
+
+    def _updateSourceControls(self) -> None:
+        """Enhanced Language Detection on braille text applies only when the braille text is checked."""
+        if self._useEnhancedCheckBox is not None:
+            from .configManager import SOURCE_TEXT
+            isText = self._sourceValues[self._sourceChoice.GetSelection()] == SOURCE_TEXT
+            self._useEnhancedCheckBox.Enable(isText)
+
+    def _onSourceChanged(self, evt: wx.CommandEvent) -> None:
+        self._updateSourceControls()
 
     def _onEnabledToggle(self, evt: wx.CommandEvent) -> None:
         """Handle enable/disable toggle."""
@@ -301,11 +339,10 @@ class BrailleLanguageSwitcherSettingsPanel(SettingsPanel):
         self._configManager.enabled = currentEnabled
         self._configManager.autoInputSwitching = self._inputSwitchingCheckBox.GetValue()
 
-        # Only save enhanced detection settings if the controls exist
+        self._configManager.languageSource = self._sourceValues[self._sourceChoice.GetSelection()]
         if self._useEnhancedCheckBox is not None:
             self._configManager.useEnhancedDetection = self._useEnhancedCheckBox.GetValue()
-        if self._wordThresholdCtrl is not None:
-            self._configManager.minWordThreshold = self._wordThresholdCtrl.GetValue()
+        self._configManager.minWordThreshold = self._wordThresholdCtrl.GetValue()
 
         # Update enabled state for each language based on checkbox
         for index, langCode in enumerate(self._languageCodes):
